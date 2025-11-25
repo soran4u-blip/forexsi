@@ -1,5 +1,4 @@
 
-
 import React, { useState } from 'react';
 import { X, CreditCard, CheckCircle2, Megaphone, LayoutTemplate, Palette, Loader2, ArrowRight } from 'lucide-react';
 import { AdData } from '../types';
@@ -36,8 +35,13 @@ export const AdvertiseModal: React.FC<AdvertiseModalProps> = ({ isOpen, onClose,
     setIsProcessing(true);
     // Simulate payment processing
     setTimeout(() => {
+      // Safe ID generation
+      const safeId = (window.crypto && window.crypto.randomUUID) 
+        ? window.crypto.randomUUID() 
+        : Math.random().toString(36).substring(2) + Date.now().toString(36);
+
       const newAd: AdData = {
-        id: crypto.randomUUID(),
+        id: safeId,
         company: formData.company,
         text: formData.text,
         uri: formData.uri || '#',

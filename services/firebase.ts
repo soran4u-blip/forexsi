@@ -1,9 +1,7 @@
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
 
-// --------------------------------------------------------
-// TODO: PASTE YOUR FIREBASE CONFIGURATION HERE
-// --------------------------------------------------------
+import { initializeApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
+
 const firebaseConfig = {
   apiKey: "AIzaSyBMdty-SL1t0kaig8TvBzSmHI7MLljsLIA",
   authDomain: "forexsignal-13f7f.firebaseapp.com",
@@ -14,24 +12,8 @@ const firebaseConfig = {
   measurementId: "G-SK7FV3BSL3"
 };
 
-// Check if config is set
-export const isFirebaseConfigured = () => {
-  return firebaseConfig.apiKey !== "YOUR_API_KEY";
-};
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-let app;
-let dbInstance;
-
-if (isFirebaseConfigured()) {
-  try {
-    app = initializeApp(firebaseConfig);
-    dbInstance = getFirestore(app);
-    console.log("Firebase initialized successfully");
-  } catch (error) {
-    console.error("Firebase initialization error:", error);
-  }
-} else {
-  console.warn("Firebase not configured. Using LocalStorage fallback.");
-}
-
-export const db = dbInstance;
+export { app, db };

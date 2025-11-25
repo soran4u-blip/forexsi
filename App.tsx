@@ -6,7 +6,7 @@ import { SignalCard } from './components/SignalCard';
 import { AdSidebar } from './components/AdSidebar';
 import { AdvertiseModal } from './components/AdvertiseModal';
 import { AdminDashboard } from './components/AdminDashboard';
-import { Zap, BrainCircuit, RefreshCw, LayoutGrid, Filter, SlidersHorizontal, X, RotateCcw, Settings, Check, Megaphone, Database, Shield, Cloud, HardDrive } from 'lucide-react';
+import { Zap, BrainCircuit, RefreshCw, LayoutGrid, Filter, SlidersHorizontal, X, RotateCcw, Settings, Check, Megaphone, Database, Shield, Cloud, WifiOff } from 'lucide-react';
 
 const AVAILABLE_INDICATORS = [
   "RSI (Relative Strength Index)",
@@ -26,6 +26,14 @@ const DEFAULT_PREFERENCES: UserPreferences = {
 
 type TabType = 'all' | 'active' | 'history';
 
+// Safe ID Generator helper
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+};
+
 export default function App() {
   const [signals, setSignals] = useState<TradingSignal[]>([]);
   const [ads, setAds] = useState<AdData[]>([]);
@@ -34,64 +42,40 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDbLoading, setIsDbLoading] = useState(true);
+  const [dbError, setDbError] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [dbType, setDbType] = useState<string>('local');
 
-  // Filters State
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filterAssetType, setFilterAssetType] = useState<string>('ALL');
   const [filterSignalType, setFilterSignalType] = useState<string>('ALL');
   const [filterTimeframe, setFilterTimeframe] = useState<string>('ALL');
   const [minConfidence, setMinConfidence] = useState<number>(0);
 
-  // User Preferences State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
 
-  // Modals State
   const [isAdModalOpen, setIsAdModalOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
 
   // Initialize Database and Load Data
   useEffect(() => {
     const initData = async () => {
-      // 1. Identify DB Type
-      // @ts-ignore
-      setDbType(db.type || 'local');
-
-      // 2. Define a strict timeout for the ENTIRE loading process
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Global Load Timeout")), 4000)
-      );
-
-      // 3. Define the data loading logic
-      const loadLogic = async () => {
-        // Init DB connection
+      try {
         await db.init();
         
-        // Fetch Data parallel
+        // Fetch Data concurrently
         const [loadedSignals, loadedAds] = await Promise.all([
-          db.signals.getAll().catch(e => { console.warn("Signal fetch failed", e); return []; }),
-          db.ads.getAll().catch(e => { console.warn("Ad fetch failed", e); return []; })
+          db.signals.getAll().catch(e => { console.error("Signals fetch error:", e); return []; }),
+          db.ads.getAll().catch(e => { console.error("Ads fetch error:", e); return []; })
         ]);
-        
-        return { loadedSignals, loadedAds };
-      };
 
-      try {
-        // Race logic against time
-        const result: any = await Promise.race([loadLogic(), timeoutPromise]);
-        
-        if (result) {
-          setSignals(result.loadedSignals || []);
-          setAds(result.loadedAds || []);
-        }
+        setSignals(loadedSignals);
+        setAds(loadedAds);
+        setDbError(false);
       } catch (e) {
-        console.warn("Database initialization took too long or failed. Falling back to default state.", e);
-        // We do NOT set error state here, to allow the user to use the app even if DB is slow/offline.
-        // The app will just start empty or with whatever local defaults exist.
+        console.error("Critical Database Error during init:", e);
+        setDbError(true);
       } finally {
-        // ALWAYS unblock the UI
         setIsDbLoading(false);
       }
     };
@@ -99,7 +83,7 @@ export default function App() {
     initData();
   }, []);
 
-  // Load preferences on mount
+  // Load preferences from local storage (safe to keep local)
   useEffect(() => {
     const saved = localStorage.getItem('alphaSignalPrefs');
     if (saved) {
@@ -111,12 +95,10 @@ export default function App() {
     }
   }, []);
 
-  // Save preferences on change
   useEffect(() => {
     localStorage.setItem('alphaSignalPrefs', JSON.stringify(preferences));
   }, [preferences]);
 
-  // Manual refresh for prices to save tokens
   const handleRefreshPrices = async () => {
     const activeAssets = signals
       .filter(s => s.status === SignalStatus.ACTIVE)
@@ -125,12 +107,10 @@ export default function App() {
     if (activeAssets.length === 0) return;
 
     setIsRefreshing(true);
-    // Remove duplicates to minimize API tokens
     const uniqueAssets: string[] = Array.from(new Set(activeAssets));
 
     try {
       const prices = await getLatestPrices(uniqueAssets);
-      
       setSignals(prevSignals => prevSignals.map(signal => {
         if (signal.status === SignalStatus.ACTIVE && prices[signal.asset]) {
             return {
@@ -147,8 +127,12 @@ export default function App() {
     }
   };
 
-  // Generate a new signal
   const handleGenerateSignal = async () => {
+    if (dbError) {
+      setError("Cannot save signal: Database connection failed.");
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     try {
@@ -156,18 +140,16 @@ export default function App() {
       
       const newSignal: TradingSignal = {
         ...partialSignal as TradingSignal,
-        id: crypto.randomUUID(),
+        id: generateId(),
         asset: selectedAsset.symbol,
         assetType: selectedAsset.type,
         status: SignalStatus.ACTIVE,
         openTime: new Date().toISOString(),
-        currentPrice: partialSignal.entryPrice // Initialize current price
+        currentPrice: partialSignal.entryPrice
       };
 
-      // Save to Database
       await db.signals.add(newSignal);
 
-      // Update UI
       setSignals(prev => [newSignal, ...prev]);
       setActiveTab('all'); 
       setFilterAssetType('ALL');
@@ -176,32 +158,29 @@ export default function App() {
       setMinConfidence(0);
     } catch (err) {
       console.error(err);
-      setError("Failed to generate signal. Please ensure API Key is set or try again.");
+      setError("Failed to generate signal. Check API Key or DB connection.");
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleCloseSignal = async (id: string, outcome: 'win' | 'loss') => {
-    // Find the signal to update
+    if (dbError) return;
+
     const signalToClose = signals.find(s => s.id === id);
     if (!signalToClose) return;
 
     let pnlPercent = 0;
     let pnlValue = 0;
 
-    // Calculate simplified PnL
     if (outcome === 'win') {
-      // Target Hit
       pnlPercent = Math.abs((signalToClose.takeProfit - signalToClose.entryPrice) / signalToClose.entryPrice * 100);
-      pnlValue = 100 * pnlPercent; // Simplified $100 per 1% move
+      pnlValue = 100 * pnlPercent;
     } else {
-      // Stop Hit
       pnlPercent = -Math.abs((signalToClose.entryPrice - signalToClose.stopLoss) / signalToClose.entryPrice * 100);
       pnlValue = 100 * pnlPercent;
     }
     
-    // Fix decimal places
     pnlPercent = Math.round(pnlPercent * 100) / 100;
     pnlValue = Math.round(pnlValue);
 
@@ -213,37 +192,35 @@ export default function App() {
       realizedPnLValue: pnlValue
     };
 
-    // Update Database
     await db.signals.update(updatedSignal);
-
-    // Update UI
     setSignals(prev => prev.map(s => s.id === id ? updatedSignal : s));
   };
 
-  // Admin Actions
   const handleAdminDeleteSignal = async (id: string) => {
+    if (dbError) return;
     await db.signals.delete(id);
     setSignals(prev => prev.filter(s => s.id !== id));
   };
 
   const handleAdminUpdateAd = async (ad: AdData) => {
+    if (dbError) return;
     await db.ads.update(ad);
     setAds(prev => prev.map(a => a.id === ad.id ? ad : a));
   };
 
   const handleAdminDeleteAd = async (id: string) => {
+    if (dbError) return;
     await db.ads.delete(id);
     setAds(prev => prev.filter(a => a.id !== id));
   };
 
   const handleNewAd = async (newAd: AdData) => {
-    // Save to Database
+    if (dbError) {
+      alert("Database Error: Cannot submit ad at this time.");
+      return;
+    }
     await db.ads.add(newAd);
-    
-    // Update UI - Ads come in as PENDING, so user won't see them in sidebar immediately
     setAds(prev => [newAd, ...prev]); 
-    
-    // Optional: Show a toast/notification to user that ad is pending
     alert("Ad submitted successfully! It will appear after admin approval.");
   };
 
@@ -267,22 +244,12 @@ export default function App() {
   };
 
   const filteredSignals = signals.filter(s => {
-    // 1. Tab Status Filter
     if (activeTab === 'active' && s.status !== SignalStatus.ACTIVE) return false;
     if (activeTab === 'history' && s.status !== SignalStatus.CLOSED) return false;
-
-    // 2. Asset Type Filter
     if (filterAssetType !== 'ALL' && s.assetType !== filterAssetType) return false;
-
-    // 3. Signal Type Filter
     if (filterSignalType !== 'ALL' && s.type !== filterSignalType) return false;
-
-    // 4. Timeframe Filter
     if (filterTimeframe !== 'ALL' && s.timeframe !== filterTimeframe) return false;
-
-    // 5. Confidence Filter
     if (s.confidenceScore < minConfidence) return false;
-
     return true;
   });
 
@@ -292,15 +259,14 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
         <Database className="w-12 h-12 text-indigo-500 animate-bounce mb-4" />
-        <h2 className="text-xl font-bold">Connecting to Database...</h2>
-        <p className="text-slate-400 mt-2">Syncing market signals and ads</p>
-        <p className="text-xs text-slate-600 mt-8">Taking too long? The app will auto-load in a moment.</p>
+        <h2 className="text-xl font-bold">Initializing Cloud...</h2>
+        <p className="text-slate-400 mt-2">Connecting to Firebase</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen pb-20 relative flex flex-col">
+    <div className="min-h-screen pb-20 relative flex flex-col bg-slate-900 text-slate-200">
       
       <AdvertiseModal 
         isOpen={isAdModalOpen} 
@@ -318,10 +284,9 @@ export default function App() {
         onDeleteAd={handleAdminDeleteAd}
       />
 
-      {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
-          <div className="bg-slate-800 rounded-2xl border border-slate-700 w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 w-full max-w-lg shadow-2xl overflow-hidden">
              <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-900/50">
                <h3 className="text-xl font-bold text-white flex items-center gap-2">
                  <Settings className="w-5 h-5 text-indigo-400" /> Signal Preferences
@@ -330,9 +295,7 @@ export default function App() {
                  <X className="w-6 h-6" />
                </button>
              </div>
-             
              <div className="p-6 overflow-y-auto max-h-[70vh]">
-               {/* Risk Level */}
                <div className="mb-6">
                  <label className="block text-sm font-bold text-slate-300 mb-3">Risk Profile</label>
                  <div className="grid grid-cols-3 gap-2">
@@ -347,8 +310,6 @@ export default function App() {
                    ))}
                  </div>
                </div>
-
-               {/* Duration */}
                <div className="mb-6">
                  <label className="block text-sm font-bold text-slate-300 mb-3">Trade Duration</label>
                  <div className="grid grid-cols-1 gap-2">
@@ -364,8 +325,6 @@ export default function App() {
                    ))}
                  </div>
                </div>
-
-               {/* Indicators */}
                <div>
                  <label className="block text-sm font-bold text-slate-300 mb-3">Preferred Indicators</label>
                  <div className="space-y-2">
@@ -389,12 +348,8 @@ export default function App() {
                  </div>
                </div>
              </div>
-
              <div className="p-4 bg-slate-900/50 border-t border-slate-700 flex justify-end">
-               <button 
-                onClick={() => setIsSettingsOpen(false)}
-                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition-colors"
-               >
+               <button onClick={() => setIsSettingsOpen(false)} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg">
                  Save Preferences
                </button>
              </div>
@@ -402,7 +357,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Navbar */}
       <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 backdrop-blur-md bg-opacity-80">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
@@ -416,34 +370,14 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-4">
-              
-              <button 
-                onClick={() => setIsAdModalOpen(true)}
-                className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-orange-500/30 text-orange-400 hover:text-orange-300 hover:border-orange-500/50 transition-all text-xs font-bold uppercase tracking-wide"
-              >
+              <button onClick={() => setIsAdModalOpen(true)} className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-orange-500/30 text-orange-400 hover:text-orange-300 hover:border-orange-500/50 transition-all text-xs font-bold uppercase tracking-wide">
                 <Megaphone className="w-3.5 h-3.5" /> Advertise
               </button>
 
-               {/* Tab Switcher */}
               <div className="hidden md:flex bg-slate-800 rounded-lg p-1 border border-slate-700">
-                <button
-                  onClick={() => setActiveTab('all')}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'all' ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
-                >
-                  All Signals
-                </button>
-                <button
-                  onClick={() => setActiveTab('active')}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'active' ? 'bg-slate-700 text-emerald-400 shadow-sm' : 'text-slate-400 hover:text-white'}`}
-                >
-                  Active
-                </button>
-                <button
-                  onClick={() => setActiveTab('history')}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'history' ? 'bg-slate-700 text-slate-300 shadow-sm' : 'text-slate-400 hover:text-white'}`}
-                >
-                  History
-                </button>
+                <button onClick={() => setActiveTab('all')} className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'all' ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>All Signals</button>
+                <button onClick={() => setActiveTab('active')} className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'active' ? 'bg-slate-700 text-emerald-400 shadow-sm' : 'text-slate-400 hover:text-white'}`}>Active</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'history' ? 'bg-slate-700 text-slate-300 shadow-sm' : 'text-slate-400 hover:text-white'}`}>History</button>
               </div>
             </div>
           </div>
@@ -452,14 +386,11 @@ export default function App() {
 
       <div className="flex-1 flex justify-center w-full max-w-[1800px] mx-auto gap-6 px-4">
         
-        {/* Left Sidebar */}
         <div className="hidden xl:block pt-8 sticky top-16 h-fit">
           <AdSidebar side="left" ads={ads} />
         </div>
 
-        {/* Main Center Content */}
         <main className="flex-1 w-full max-w-7xl py-8">
-          {/* Hero / Generator Section */}
           <div className="bg-slate-800/50 rounded-2xl p-6 border border-slate-700/50 backdrop-blur-sm mb-8">
             <div className="md:flex justify-between items-center gap-6">
               <div>
@@ -483,30 +414,16 @@ export default function App() {
                   ))}
                 </select>
                 
-                <button 
-                  onClick={() => setIsSettingsOpen(true)}
-                  className="flex items-center justify-center p-3 rounded-lg bg-slate-700 border border-slate-600 hover:bg-slate-600 text-slate-300 transition-colors"
-                  title="Signal Preferences"
-                >
+                <button onClick={() => setIsSettingsOpen(true)} className="flex items-center justify-center p-3 rounded-lg bg-slate-700 border border-slate-600 hover:bg-slate-600 text-slate-300 transition-colors">
                   <Settings className="w-5 h-5" />
                 </button>
 
                 <button 
                   onClick={handleGenerateSignal}
-                  disabled={isLoading}
-                  className={`flex items-center justify-center gap-2 text-white font-bold py-3 px-6 rounded-lg transition-all shadow-lg shadow-indigo-500/20 ${isLoading ? 'bg-slate-700 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 hover:scale-105 active:scale-95'}`}
+                  disabled={isLoading || dbError}
+                  className={`flex items-center justify-center gap-2 text-white font-bold py-3 px-6 rounded-lg transition-all shadow-lg shadow-indigo-500/20 ${isLoading || dbError ? 'bg-slate-700 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 hover:scale-105 active:scale-95'}`}
                 >
-                  {isLoading ? (
-                    <>
-                      <RefreshCw className="w-5 h-5 animate-spin" />
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="w-5 h-5" />
-                      Generate Signal
-                    </>
-                  )}
+                  {isLoading ? <><RefreshCw className="w-5 h-5 animate-spin" /> Analyzing...</> : <><Zap className="w-5 h-5" /> Generate Signal</>}
                 </button>
               </div>
             </div>
@@ -516,34 +433,21 @@ export default function App() {
                 <Zap className="w-4 h-4" /> {error}
               </div>
             )}
+            
+            {dbError && (
+               <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400 text-sm flex items-center gap-2">
+                <WifiOff className="w-4 h-4" /> Connection to Firebase failed. You are viewing cached or empty data.
+              </div>
+            )}
           </div>
 
-          {/* Signals Grid & Controls */}
           <div>
-            
-            {/* Mobile Tabs */}
             <div className="flex md:hidden border-b border-slate-800 mb-6 overflow-x-auto">
-              <button
-                  onClick={() => setActiveTab('all')}
-                  className={`flex-1 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === 'all' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500'}`}
-                >
-                  All
-                </button>
-              <button
-                  onClick={() => setActiveTab('active')}
-                  className={`flex-1 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === 'active' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500'}`}
-                >
-                  Active
-                </button>
-                <button
-                  onClick={() => setActiveTab('history')}
-                  className={`flex-1 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === 'history' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500'}`}
-                >
-                  History
-                </button>
+              {['all', 'active', 'history'].map(tab => (
+                 <button key={tab} onClick={() => setActiveTab(tab as TabType)} className={`flex-1 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors capitalize ${activeTab === tab ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500'}`}>{tab}</button>
+              ))}
             </div>
 
-            {/* Filter & Header Control Bar */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
               <div className="hidden md:flex items-center gap-3">
                 <LayoutGrid className="text-indigo-400" />
@@ -558,111 +462,57 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2 w-full md:w-auto">
-                <button 
-                    onClick={handleRefreshPrices}
-                    disabled={isRefreshing}
-                    className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-slate-700 text-slate-400 hover:text-white bg-slate-800 text-sm font-bold transition-all w-full md:w-auto active:scale-95"
-                >
+                <button onClick={handleRefreshPrices} disabled={isRefreshing || dbError} className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-slate-700 text-slate-400 hover:text-white bg-slate-800 text-sm font-bold transition-all w-full md:w-auto active:scale-95 disabled:opacity-50">
                     <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                     {isRefreshing ? 'Updating...' : 'Refresh Prices'}
                 </button>
 
-                <button 
-                    onClick={() => setIsFilterOpen(!isFilterOpen)}
-                    className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg border text-sm font-bold transition-all w-full md:w-auto ${isFilterOpen || activeFiltersCount > 0 ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}`}
-                >
+                <button onClick={() => setIsFilterOpen(!isFilterOpen)} className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg border text-sm font-bold transition-all w-full md:w-auto ${isFilterOpen || activeFiltersCount > 0 ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}`}>
                     {isFilterOpen ? <X className="w-4 h-4" /> : <Filter className="w-4 h-4" />}
                     {isFilterOpen ? 'Close' : 'Filters'}
-                    {activeFiltersCount > 0 && !isFilterOpen && (
-                    <span className="bg-indigo-400 text-slate-900 text-[10px] h-5 w-5 flex items-center justify-center rounded-full ml-1">
-                        {activeFiltersCount}
-                    </span>
-                    )}
+                    {activeFiltersCount > 0 && !isFilterOpen && <span className="bg-indigo-400 text-slate-900 text-[10px] h-5 w-5 flex items-center justify-center rounded-full ml-1">{activeFiltersCount}</span>}
                 </button>
               </div>
             </div>
 
-            {/* Expandable Filter Panel */}
             {isFilterOpen && (
-              <div className="mb-8 p-6 bg-slate-800/80 border border-slate-700 rounded-xl backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-200">
+              <div className="mb-8 p-6 bg-slate-800/80 border border-slate-700 rounded-xl backdrop-blur-md">
                 <div className="flex items-center gap-2 mb-4 text-white font-bold">
-                    <SlidersHorizontal className="w-4 h-4 text-indigo-400" />
-                    Refine Results
+                    <SlidersHorizontal className="w-4 h-4 text-indigo-400" /> Refine Results
                 </div>
-                
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    
-                    {/* Asset Class Filter */}
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Asset Class</label>
-                      <select 
-                        value={filterAssetType}
-                        onChange={(e) => setFilterAssetType(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5"
-                      >
+                      <select value={filterAssetType} onChange={(e) => setFilterAssetType(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-white text-sm rounded-lg p-2.5">
                         <option value="ALL">All Assets</option>
                         <option value={AssetType.CRYPTO}>Crypto</option>
                         <option value={AssetType.FOREX}>Forex</option>
                         <option value={AssetType.COMMODITY}>Commodity</option>
                       </select>
                     </div>
-
-                    {/* Signal Type Filter */}
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Direction</label>
-                      <select 
-                        value={filterSignalType}
-                        onChange={(e) => setFilterSignalType(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5"
-                      >
+                      <select value={filterSignalType} onChange={(e) => setFilterSignalType(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-white text-sm rounded-lg p-2.5">
                         <option value="ALL">Any Direction</option>
                         <option value={SignalType.LONG}>Long (Buy)</option>
                         <option value={SignalType.SHORT}>Short (Sell)</option>
                       </select>
                     </div>
-
-                    {/* Timeframe Filter */}
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Timeframe</label>
-                      <select 
-                        value={filterTimeframe}
-                        onChange={(e) => setFilterTimeframe(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5"
-                      >
+                      <select value={filterTimeframe} onChange={(e) => setFilterTimeframe(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-white text-sm rounded-lg p-2.5">
                         <option value="ALL">All Timeframes</option>
-                        {Object.values(Timeframe).map(tf => (
-                          <option key={tf} value={tf}>{tf}</option>
-                        ))}
+                        {Object.values(Timeframe).map(tf => <option key={tf} value={tf}>{tf}</option>)}
                       </select>
                     </div>
-
-                    {/* Confidence Filter */}
                     <div>
                       <label className="flex justify-between text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                        <span>Min Confidence</span>
-                        <span className="text-indigo-400">{minConfidence}%</span>
+                        <span>Min Confidence</span><span className="text-indigo-400">{minConfidence}%</span>
                       </label>
-                      <input 
-                        type="range" 
-                        min="0" 
-                        max="95" 
-                        step="5"
-                        value={minConfidence}
-                        onChange={(e) => setMinConfidence(parseInt(e.target.value))}
-                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                      />
-                      <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                        <span>0%</span>
-                        <span>100%</span>
-                      </div>
+                      <input type="range" min="0" max="95" step="5" value={minConfidence} onChange={(e) => setMinConfidence(parseInt(e.target.value))} className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
                     </div>
-
-                    {/* Actions */}
                     <div className="col-span-1 md:col-span-4 flex justify-end">
-                      <button 
-                        onClick={resetFilters}
-                        className="px-6 py-2.5 rounded-lg border border-slate-600 text-slate-400 hover:text-white hover:bg-slate-700 hover:border-slate-500 transition-all text-sm font-bold flex items-center justify-center gap-2"
-                      >
+                      <button onClick={resetFilters} className="px-6 py-2.5 rounded-lg border border-slate-600 text-slate-400 hover:text-white hover:bg-slate-700 transition-all text-sm font-bold flex items-center justify-center gap-2">
                         <RotateCcw className="w-4 h-4" /> Reset Filters
                       </button>
                     </div>
@@ -670,7 +520,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Empty State */}
             {filteredSignals.length === 0 && (
               <div className="text-center py-20 bg-slate-800/30 rounded-2xl border border-dashed border-slate-700">
                 <div className="bg-slate-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -678,67 +527,35 @@ export default function App() {
                 </div>
                 <h3 className="text-lg font-medium text-white mb-1">No signals found</h3>
                 <p className="text-slate-400 max-w-md mx-auto">
-                  {activeFiltersCount > 0 
-                    ? "Try adjusting your filters to see more results." 
-                    : (activeTab === 'active' 
-                        ? "No active signals. Generate one to get started." 
-                        : "No trade history available yet.")}
+                  {activeFiltersCount > 0 ? "Try adjusting your filters to see more results." : (activeTab === 'active' ? "No active signals. Generate one to get started." : "No trade history available yet.")}
                 </p>
-                {activeFiltersCount > 0 && (
-                  <button onClick={resetFilters} className="mt-4 text-indigo-400 text-sm font-bold hover:text-indigo-300">
-                    Clear all filters
-                  </button>
-                )}
+                {activeFiltersCount > 0 && <button onClick={resetFilters} className="mt-4 text-indigo-400 text-sm font-bold hover:text-indigo-300">Clear all filters</button>}
               </div>
             )}
 
-            {/* Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredSignals.map(signal => (
-                <SignalCard 
-                  key={signal.id} 
-                  signal={signal} 
-                  onClose={handleCloseSignal} 
-                />
+                <SignalCard key={signal.id} signal={signal} onClose={handleCloseSignal} />
               ))}
             </div>
           </div>
         </main>
 
-        {/* Right Sidebar */}
         <div className="hidden xl:block pt-8 sticky top-16 h-fit">
           <AdSidebar side="right" ads={ads} />
         </div>
       </div>
 
-      {/* Footer */}
       <footer className="mt-8 border-t border-slate-800 py-8 bg-slate-900 relative">
         <div className="max-w-7xl mx-auto px-4 text-center">
-          <p className="text-slate-500 text-sm">
-            Powered by Google Gemini AI • Trading involves risk • Not financial advice
-          </p>
-          <div className="flex justify-center gap-4 mt-4">
-             <button 
-                onClick={() => setIsAdModalOpen(true)}
-                className="text-xs font-bold text-slate-600 hover:text-indigo-400 uppercase tracking-widest transition-colors"
-            >
-                Advertise with us
-            </button>
-          </div>
-
-          {/* Connection Status Badge */}
+          <p className="text-slate-500 text-sm">Powered by Google Gemini AI • Trading involves risk</p>
           <div className="mt-6 flex justify-center">
-             <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border ${dbType === 'firebase' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-amber-500/10 border-amber-500/20 text-amber-500'}`}>
-                {dbType === 'firebase' ? <Cloud className="w-3 h-3" /> : <HardDrive className="w-3 h-3" />}
-                {dbType === 'firebase' ? 'Cloud Database Active' : 'Local Storage Mode'}
+             <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border ${!dbError ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-red-500/10 border-red-500/20 text-red-500'}`}>
+                {!dbError ? <Cloud className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                {!dbError ? 'Cloud Database Active' : 'Connection Error'}
              </div>
           </div>
-          
-          {/* Admin Button */}
-          <button 
-             onClick={() => setIsAdminOpen(true)}
-             className="absolute bottom-4 right-4 text-slate-700 hover:text-slate-500 transition-colors"
-          >
+          <button onClick={() => setIsAdminOpen(true)} className="absolute bottom-4 right-4 text-slate-700 hover:text-slate-500 transition-colors">
              <Shield className="w-4 h-4" />
           </button>
         </div>

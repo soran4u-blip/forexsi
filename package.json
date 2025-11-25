@@ -10,12 +10,10 @@
   },
   "dependencies": {
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "@google/genai": "0.1.1",
-    "recharts": "2.12.7",
+    "@google/genai": "0.2.1",
     "lucide-react": "0.378.0",
-    "clsx": "latest",
-    "tailwind-merge": "latest",
+    "recharts": "2.12.7",
+    "react-dom": "^19.2.0",
     "firebase": "^12.6.0"
   },
   "devDependencies": {

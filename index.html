@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -18,7 +17,6 @@
       .font-mono {
         font-family: 'JetBrains Mono', monospace;
       }
-      /* Custom scrollbar for webkit */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
@@ -33,38 +31,95 @@
       ::-webkit-scrollbar-thumb:hover {
         background: #64748b; 
       }
+      #root {
+        min-height: 100vh;
+      }
+      .loading-spinner {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: #6366f1;
+        font-weight: bold;
+        font-size: 1.2rem;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      #error-log {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background: #7f1d1d;
+        color: #fecaca;
+        padding: 1rem;
+        z-index: 9999;
+        font-family: monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
     </style>
-  
-  <!-- Critical Error Handler Script: Catches errors before React loads -->
-  <script>
-    window.addEventListener('error', function(event) {
-      console.error("CRITICAL BROWSER ERROR:", event.message, "at", event.filename, ":", event.lineno);
-    });
-  </script>
+    
+    <script>
+      // Polyfill for crypto.randomUUID (Safe Version)
+      if (window.crypto && !window.crypto.randomUUID) {
+        // Simple fallback that doesn't try to overwrite read-only property if it fails
+        try {
+          window.crypto.randomUUID = function() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+              var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+              return v.toString(16);
+            });
+          };
+        } catch (e) {
+          console.warn("Could not polyfill crypto.randomUUID");
+        }
+      }
+    </script>
 
-  <script type="importmap">
+    <script>
+      window.addEventListener('error', function(event) {
+        const errorBox = document.getElementById('error-log');
+        if (errorBox) {
+          errorBox.style.display = 'block';
+          errorBox.innerHTML += `<div>[Global Error] ${event.message}</div>`;
+        }
+      });
+      window.addEventListener('unhandledrejection', function(event) {
+        const errorBox = document.getElementById('error-log');
+        if (errorBox) {
+           errorBox.style.display = 'block';
+           errorBox.innerHTML += `<div>[Promise Error] ${event.reason}</div>`;
+        }
+      });
+    </script>
+
+    <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@18.2.0",
-    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
-    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-    "react-dom": "https://esm.sh/react-dom@18.2.0",
-    "@google/genai": "https://esm.sh/@google/genai@0.1.1",
-    "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
-    "lucide-react": "https://esm.sh/lucide-react@0.378.0",
+    "react": "https://esm.sh/react@18.3.1",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "firebase/app": "https://esm.sh/firebase@10.12.0/app",
     "firebase/firestore": "https://esm.sh/firebase@10.12.0/firestore",
-    "clsx": "https://esm.sh/clsx",
-    "tailwind-merge": "https://esm.sh/tailwind-merge",
+    "@google/genai": "https://esm.sh/@google/genai@0.2.1",
+    "lucide-react": "https://esm.sh/lucide-react@0.378.0",
+    "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
   }
 }
 </script>
-</head>
+  </head>
   <body>
-    <div id="root"></div>
+    <div id="error-log"></div>
+    <div id="root">
+      <div class="loading-spinner">
+        <div>Loading AlphaSignal AI...</div>
+      </div>
+    </div>
     <script type="module" src="./index.tsx"></script>
   </body>
 </html>
